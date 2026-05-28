@@ -73,12 +73,11 @@ async function handleProbeAPI(request, env, context, pathArray) {
     const db = env.DB;
     const PROBE_SECRET = env.ADMIN_PASSWORD || "admin";
 
-    // 1. 探针公共大盘数据拉取 (无密码/公开)
+    // 1. 探针公共大盘数据拉取
     if (method === 'GET' && subPath === 'public') {
         const settings = { theme: 'theme1', is_public: 'true', site_title: '⚡ Server Monitor Pro', show_price: 'true', show_expire: 'true', show_bw: 'true', show_tf: 'true', custom_css: '', custom_bg: '', custom_head: '', custom_script: '' };
         try { const { results } = await db.prepare('SELECT * FROM probe_settings').all(); if (results) results.forEach(r => settings[r.key] = r.value); } catch(e){}
         
-        // 访问量更新逻辑
         const isAjax = url.searchParams.get('ajax') === '1';
         if (!isAjax) {
             const localNow = new Date(new Date().getTime() + 8 * 60 * 60000); const todayStr = `${localNow.getFullYear()}-${localNow.getMonth() + 1}-${localNow.getDate()}`;
@@ -90,10 +89,7 @@ async function handleProbeAPI(request, env, context, pathArray) {
 
         const authHeader = request.headers.get("Authorization");
         const isLoggedIn = await verifyAuth(authHeader, db, env);
-        
-        if (settings.is_public !== 'true' && !isLoggedIn) {
-            return Response.json({ error: "Private Dashboard" }, { status: 401 });
-        }
+        if (settings.is_public !== 'true' && !isLoggedIn) return Response.json({ error: "Private Dashboard" }, { status: 401 });
 
         const servers = (await db.prepare('SELECT id, name, cpu, ram, disk, load_avg, uptime, last_updated, net_in_speed, net_out_speed, os, arch, virt, tcp_conn, udp_conn, country, ip_v4, ip_v6, server_group, price, expire_date, bandwidth, traffic_limit, ping_ct, ping_cu, ping_cm, ping_bd, monthly_rx, monthly_tx, net_rx, net_tx, cpu_info, ram_used, ram_total, disk_used, disk_total FROM probe_servers WHERE is_hidden != "true"').all()).results;
         return Response.json({ settings, servers });
@@ -107,81 +103,10 @@ async function handleProbeAPI(request, env, context, pathArray) {
         return Response.json(server);
     }
 
-    // 3. 探针节点后台上报心跳
-    if (method === 'POST' && subPath === 'update') {
-        try {
-            const data = await request.json(); const { id, secret, metrics } = data;
-            if (secret !== PROBE_SECRET) return new Response('Unauthorized', { status: 401 });
-            let countryCode = request.cf && request.cf.country ? request.cf.country : 'XX'; if (countryCode.toUpperCase() === 'TW') countryCode = 'CN';
-            const serverExists = await db.prepare('SELECT * FROM probe_servers WHERE id = ?').bind(id).first();
-            if (!serverExists) return new Response('Server not found', { status: 404 });
-            
-            // 系统设置拉取(用于流量重置与TG告警)
-            let sys = { auto_reset_traffic: 'false', report_interval: '5', tg_notify: 'false', tg_bot_token: '', tg_chat_id: '' };
-            try { const { results } = await db.prepare('SELECT * FROM probe_settings').all(); if (results) results.forEach(r => sys[r.key] = r.value); } catch(e){}
-
-            const localNow = new Date(new Date().getTime() + 8 * 60 * 60000); const currentMonthStr = `${localNow.getFullYear()}-${localNow.getMonth() + 1}`;
-            let monthly_rx = parseFloat(serverExists.monthly_rx || '0'); let monthly_tx = parseFloat(serverExists.monthly_tx || '0');
-            let last_rx = parseFloat(serverExists.last_rx || '0'); let last_tx = parseFloat(serverExists.last_tx || '0');
-            let reset_month = serverExists.reset_month || currentMonthStr;
-            if (sys.auto_reset_traffic === 'true' && currentMonthStr !== reset_month) { monthly_rx = 0; monthly_tx = 0; reset_month = currentMonthStr; }
-            const current_rx = parseFloat(metrics.net_rx || '0'); const current_tx = parseFloat(metrics.net_tx || '0');
-            if (current_rx >= last_rx) monthly_rx += (current_rx - last_rx); else monthly_rx += current_rx;
-            if (current_tx >= last_tx) monthly_tx += (current_tx - last_tx); else monthly_tx += current_tx;
-            last_rx = current_rx; last_tx = current_tx;
-            
-            let history = {}; try { history = JSON.parse(serverExists.history || '{}'); } catch(e) {}
-            const nowMs = Date.now(); const lastHistTime = history.last_time || 0;
-            if (nowMs - lastHistTime >= 300000 || !history.time) {
-                const maxPoints = 288; const updateArr = (arr, val) => { if (!Array.isArray(arr)) arr = []; arr.push(val); if (arr.length > maxPoints) arr.shift(); return arr; };
-                const updateLabels = (arr) => { if (!Array.isArray(arr)) arr = []; const d = new Date(nowMs + 8 * 60 * 60000); arr.push(d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0')); if (arr.length > maxPoints) arr.shift(); return arr; };
-                history.cpu = updateArr(history.cpu, parseFloat(metrics.cpu) || 0); history.ram = updateArr(history.ram, parseFloat(metrics.ram) || 0); history.proc = updateArr(history.proc, parseInt(metrics.processes) || 0); history.net_in = updateArr(history.net_in, parseFloat(metrics.net_in_speed) || 0); history.net_out = updateArr(history.net_out, parseFloat(metrics.net_out_speed) || 0); history.tcp = updateArr(history.tcp, parseInt(metrics.tcp_conn) || 0); history.udp = updateArr(history.udp, parseInt(metrics.udp_conn) || 0); history.ping_ct = updateArr(history.ping_ct, parseInt(metrics.ping_ct) || 0); history.ping_cu = updateArr(history.ping_cu, parseInt(metrics.ping_cu) || 0); history.ping_cm = updateArr(history.ping_cm, parseInt(metrics.ping_cm) || 0); history.ping_bd = updateArr(history.ping_bd, parseInt(metrics.ping_bd) || 0); history.time = updateLabels(history.time); history.last_time = nowMs;
-            }
-            await db.prepare(`UPDATE probe_servers SET cpu=?, ram=?, disk=?, load_avg=?, uptime=?, last_updated=?, ram_total=?, net_rx=?, net_tx=?, net_in_speed=?, net_out_speed=?, os=?, cpu_info=?, arch=?, boot_time=?, ram_used=?, swap_total=?, swap_used=?, disk_total=?, disk_used=?, processes=?, tcp_conn=?, udp_conn=?, country=?, ip_v4=?, ip_v6=?, ping_ct=?, ping_cu=?, ping_cm=?, ping_bd=?, monthly_rx=?, monthly_tx=?, last_rx=?, last_tx=?, reset_month=?, history=?, virt=? WHERE id=?`).bind(metrics.cpu, metrics.ram, metrics.disk, metrics.load, metrics.uptime, Date.now(), metrics.ram_total || '0', metrics.net_rx || '0', metrics.net_tx || '0', metrics.net_in_speed || '0', metrics.net_out_speed || '0', metrics.os || '', metrics.cpu_info || '', metrics.arch || '', metrics.boot_time || '', metrics.ram_used || '0', metrics.swap_total || '0', metrics.swap_used || '0', metrics.disk_total || '0', metrics.disk_used || '0', metrics.processes || '0', metrics.tcp_conn || '0', metrics.udp_conn || '0', countryCode, metrics.ip_v4 || '0', metrics.ip_v6 || '0', metrics.ping_ct || '0', metrics.ping_cu || '0', metrics.ping_cm || '0', metrics.ping_bd || '0', monthly_rx.toString(), monthly_tx.toString(), last_rx.toString(), last_tx.toString(), reset_month, JSON.stringify(history), metrics.virt || '', id).run();
-            
-            // TG 掉线检测
-            if (sys.tg_notify === 'true') {
-                context.waitUntil((async () => {
-                    const { results: allServers } = await db.prepare('SELECT id, name, last_updated FROM probe_servers').all();
-                    let alertState = {}; const stateRes = await db.prepare("SELECT value FROM probe_settings WHERE key = 'alert_state'").first();
-                    if (stateRes) alertState = JSON.parse(stateRes.value);
-                    let stateChanged = false; const now = Date.now();
-                    for (const s of allServers) {
-                        const isOffline = (now - s.last_updated) > 120000; 
-                        if (isOffline && !alertState[s.id]) {
-                            await fetch(`https://api.telegram.org/bot${sys.tg_bot_token}/sendMessage`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: sys.tg_chat_id, text: `⚠️ <b>节点离线告警</b>\n\n<b>节点名称:</b> ${s.name}\n<b>状态:</b> 离线 (超过2分钟未上报)\n<b>时间:</b> ${new Date().toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai'})}`, parse_mode: 'HTML' }) });
-                            alertState[s.id] = true; stateChanged = true;
-                        } else if (!isOffline && alertState[s.id]) {
-                            await fetch(`https://api.telegram.org/bot${sys.tg_bot_token}/sendMessage`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: sys.tg_chat_id, text: `✅ <b>节点恢复通知</b>\n\n<b>节点名称:</b> ${s.name}\n<b>状态:</b> 恢复在线\n<b>时间:</b> ${new Date().toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai'})}`, parse_mode: 'HTML' }) });
-                            delete alertState[s.id]; stateChanged = true;
-                        }
-                    }
-                    if (stateChanged) await db.prepare('INSERT INTO probe_settings (key, value) VALUES ("alert_state", ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind(JSON.stringify(alertState)).run();
-                })());
-            }
-            return new Response('OK', { status: 200 });
-        } catch (e) { return new Response('Error', { status: 400 }); }
-    }
-
-    // 4. 下发探针安装脚本
-    if (method === 'GET' && subPath === 'install.sh') {
-        const osType = url.searchParams.get('os') || 'debian';
-        const sh_bin = osType === 'alpine' ? "/bin/sh" : "/bin/bash";
-        const cmdApp = "curl"; const sh_sys = "systemctl";
-        let reportInterval = '5'; try { const res = await db.prepare("SELECT value FROM probe_settings WHERE key = 'report_interval'").first(); if(res) reportInterval = res.value; } catch(e){}
-
-        let bashScript = `#!${sh_bin}\nSERVER_ID=$1\nSECRET=$2\nWORKER_URL="${url.origin}/api/probe/update"\nif [ -z "$SERVER_ID" ] || [ -z "$SECRET" ]; then echo "错误: 缺少参数。"; exit 1; fi\necho "开始安装全面增强版 CF Probe Agent (${osType === 'alpine' ? 'Alpine/OpenRC' : 'Systemd'})..."\n`;
-        if (osType === 'alpine') bashScript += `rc-service cf-probe stop 2>/dev/null\n`; else bashScript += `${sh_sys} stop cf-probe.service 2>/dev/null\n`;
-        bashScript += `pkill -f cf-probe.sh 2>/dev/null\ncat << EOF > /usr/local/bin/cf-probe.sh\n#!${sh_bin}\nSERVER_ID="$SERVER_ID"\nSECRET="$SECRET"\nWORKER_URL="$WORKER_URL"\nget_net_bytes() { awk 'NR>2 {rx+=\\$2; tx+=\\$10} END {printf "%.0f %.0f", rx, tx}' /proc/net/dev; }\nget_cpu_stat() { awk '/^cpu / {print \\$2+\\$3+\\$4+\\$5+\\$6+\\$7+\\$8+\\$9, \\$5+\\$6}' /proc/stat; }\nget_http_ping() { rtt=\\$(${cmdApp} -o /dev/null -s -m 2 -w "%{time_total}" "http://\\$1" 2>/dev/null | awk '{printf "%.0f", \\$1*1000}'); echo "\\\${rtt:-0}"; }\nNET_STAT=\\$(get_net_bytes)\nRX_PREV=\\$(echo \\$NET_STAT | awk '{print \\$1}')\nTX_PREV=\\$(echo \\$NET_STAT | awk '{print \\$2}')\nif [ -z "\\$RX_PREV" ]; then RX_PREV=0; fi\nif [ -z "\\$TX_PREV" ]; then TX_PREV=0; fi\nCPU_STAT=\\$(get_cpu_stat)\nPREV_CPU_TOTAL=\\$(echo \\$CPU_STAT | awk '{print \\$1}')\nPREV_CPU_IDLE=\\$(echo \\$CPU_STAT | awk '{print \\$2}')\nLOOP_COUNT=0\nIPV4="0"; IPV6="0"\nPING_CT="0"; PING_CU="0"; PING_CM="0"; PING_BD="0"\nwhile true; do\n  if [ \\$((LOOP_COUNT % 60)) -eq 0 ]; then\n    ${cmdApp} -s -4 -m 3 https://cloudflare.com/cdn-cgi/trace 2>/dev/null | grep -q "ip=" && IPV4="1" || IPV4="0"\n    ${cmdApp} -s -6 -m 3 https://cloudflare.com/cdn-cgi/trace 2>/dev/null | grep -q "ip=" && IPV6="1" || IPV6="0"\n  fi\n  if [ \\$((LOOP_COUNT % 6)) -eq 0 ]; then\n    idx=\\$((LOOP_COUNT % 3))\n    case \\$idx in\n      0) CT_NODE="bj-ct-dualstack.ip.zstaticcdn.com"; CU_NODE="bj-cu-dualstack.ip.zstaticcdn.com"; CM_NODE="bj-cm-dualstack.ip.zstaticcdn.com" ;;\n      1) CT_NODE="sh-ct-dualstack.ip.zstaticcdn.com"; CU_NODE="sh-cu-dualstack.ip.zstaticcdn.com"; CM_NODE="sh-cm-dualstack.ip.zstaticcdn.com" ;;\n      2) CT_NODE="gd-ct-dualstack.ip.zstaticcdn.com"; CU_NODE="gd-cu-dualstack.ip.zstaticcdn.com"; CM_NODE="gd-cm-dualstack.ip.zstaticcdn.com" ;;\n    esac\n    PING_CT=\\$(get_http_ping "\\$CT_NODE")\n    PING_CU=\\$(get_http_ping "\\$CU_NODE")\n    PING_CM=\\$(get_http_ping "\\$CM_NODE")\n    PING_BD=\\$(get_http_ping "lf3-ips.zstaticcdn.com")\n  fi\n  LOOP_COUNT=\\$((LOOP_COUNT + 1))\n  OS=\\$(awk -F= '/^PRETTY_NAME/{print \\$2}' /etc/os-release 2>/dev/null | tr -d '"')\n  if [ -z "\\$OS" ]; then OS=\\$(uname -srm); fi\n  ARCH=\\$(uname -m)\n  BOOT_TIME=\\$(uptime -s 2>/dev/null || stat -c %y / 2>/dev/null | cut -d'.' -f1 || echo "Unknown")\n  CPU_INFO=\\$(grep -m 1 'model name' /proc/cpuinfo | awk -F: '{print \\$2}' | xargs | tr -d '"')\n  VIRT=""\n  if command -v systemd-detect-virt >/dev/null 2>&1; then VIRT=\\$(systemd-detect-virt 2>/dev/null); fi\n  if [ -z "\\$VIRT" ] || [ "\\$VIRT" = "none" ]; then\n    if grep -q "lxc" /proc/1/environ 2>/dev/null; then VIRT="lxc"\n    elif grep -q "docker" /proc/1/environ 2>/dev/null; then VIRT="docker"\n    elif [ -f /proc/user_beancounters ]; then VIRT="openvz"\n    elif grep -qi "kvm" /proc/cpuinfo 2>/dev/null; then VIRT="kvm"\n    elif grep -qi "qemu" /proc/cpuinfo 2>/dev/null; then VIRT="qemu"\n    elif [ -f /sys/class/dmi/id/product_name ]; then VIRT=\\$(cat /sys/class/dmi/id/product_name | head -n1 | cut -d' ' -f1)\n    else VIRT="Unknown"\n    fi\n  fi\n  VIRT=\\$(echo "\\$VIRT" | tr '[:lower:]' '[:upper:]')\n  CPU_STAT=\\$(get_cpu_stat)\n  CPU_TOTAL=\\$(echo \\$CPU_STAT | awk '{print \\$1}')\n  CPU_IDLE=\\$(echo \\$CPU_STAT | awk '{print \\$2}')\n  DIFF_TOTAL=\\$((CPU_TOTAL - PREV_CPU_TOTAL))\n  DIFF_IDLE=\\$((CPU_IDLE - PREV_CPU_IDLE))\n  CPU=\\$(awk -v t=\\$DIFF_TOTAL -v i=\\$DIFF_IDLE 'BEGIN {if (t<=0) print 0; else {pct=(1 - i/t)*100; if(pct<0) print 0; else if(pct>100) print 100; else printf "%.2f", pct}}')\n  PREV_CPU_TOTAL=\\$CPU_TOTAL; PREV_CPU_IDLE=\\$CPU_IDLE\n  MEM_INFO=\\$(free -m 2>/dev/null)\n  RAM_TOTAL=\\$(echo "\\$MEM_INFO" | awk '/Mem:/ {print \\$2}')\n  RAM_USED=\\$(echo "\\$MEM_INFO" | awk '/Mem:/ {print \\$3}')\n  RAM=\\$(awk "BEGIN {if(\\$RAM_TOTAL>0) printf \\"%.2f\\", \\$RAM_USED/\\$RAM_TOTAL * 100.0; else print 0}")\n  SWAP_TOTAL=\\$(echo "\\$MEM_INFO" | awk '/Swap:/ {print \\$2}')\n  SWAP_USED=\\$(echo "\\$MEM_INFO" | awk '/Swap:/ {print \\$3}')\n  if [ -z "\\$SWAP_TOTAL" ]; then SWAP_TOTAL=0; fi\n  if [ -z "\\$SWAP_USED" ]; then SWAP_USED=0; fi\n  DISK_INFO=\\$(df -m / 2>/dev/null | tail -n1 | awk '{print \\$2, \\$3, \\$5}')\n  DISK_TOTAL=\\$(echo "\\$DISK_INFO" | awk '{print \\$1}')\n  DISK_USED=\\$(echo "\\$DISK_INFO" | awk '{print \\$2}')\n  DISK=\\$(echo "\\$DISK_INFO" | awk '{print \\$3}' | tr -d '%')\n  LOAD=\\$(cat /proc/loadavg | awk '{print \\$1, \\$2, \\$3}')\n  UPTIME=\\$(awk '{d=int(\\$1/86400); h=int((\\$1%86400)/3600); m=int((\\$1%3600)/60); if(d>0) printf "%d days, %02d:%02d\\n", d, h, m; else printf "%02d:%02d\\n", h, m}' /proc/uptime 2>/dev/null || uptime -p 2>/dev/null | sed 's/up //')\n  PROCESSES=\\$(ps -e 2>/dev/null | grep -v "PID" | wc -l)\n  if command -v ss >/dev/null 2>&1; then TCP_CONN=\\$(ss -ant 2>/dev/null | grep -v "State" | wc -l); UDP_CONN=\\$(ss -anu 2>/dev/null | grep -v "State" | wc -l); else TCP_CONN=\\$(netstat -ant 2>/dev/null | grep -c "^tcp"); UDP_CONN=\\$(netstat -anu 2>/dev/null | grep -c "^udp"); fi\n  if [ -z "\\$TCP_CONN" ]; then TCP_CONN=0; fi\n  if [ -z "\\$UDP_CONN" ]; then UDP_CONN=0; fi\n  NET_STAT=\\$(get_net_bytes)\n  RX_NOW=\\$(echo \\$NET_STAT | awk '{print \\$1}')\n  TX_NOW=\\$(echo \\$NET_STAT | awk '{print \\$2}')\n  if [ -z "\\$RX_NOW" ]; then RX_NOW=0; fi\n  if [ -z "\\$TX_NOW" ]; then TX_NOW=0; fi\n  RX_SPEED=\\$(((RX_NOW - RX_PREV) / ${reportInterval}))\n  TX_SPEED=\\$(((TX_NOW - TX_PREV) / ${reportInterval}))\n  RX_PREV=\\$RX_NOW; TX_PREV=\\$TX_NOW\n  PAYLOAD="{\\"id\\": \\"\\$SERVER_ID\\", \\"secret\\": \\"\\$SECRET\\", \\"metrics\\": { \\"cpu\\": \\"\\$CPU\\", \\"ram\\": \\"\\$RAM\\", \\"ram_total\\": \\"\\$RAM_TOTAL\\", \\"ram_used\\": \\"\\$RAM_USED\\", \\"swap_total\\": \\"\\$SWAP_TOTAL\\", \\"swap_used\\": \\"\\$SWAP_USED\\", \\"disk\\": \\"\\$DISK\\", \\"disk_total\\": \\"\\$DISK_TOTAL\\", \\"disk_used\\": \\"\\$DISK_USED\\", \\"load\\": \\"\\$LOAD\\", \\"uptime\\": \\"\\$UPTIME\\", \\"boot_time\\": \\"\\$BOOT_TIME\\", \\"net_rx\\": \\"\\$RX_NOW\\", \\"net_tx\\": \\"\\$TX_NOW\\", \\"net_in_speed\\": \\"\\$RX_SPEED\\", \\"net_out_speed\\": \\"\\$TX_SPEED\\", \\"os\\": \\"\\$OS\\", \\"arch\\": \\"\\$ARCH\\", \\"cpu_info\\": \\"\\$CPU_INFO\\", \\"processes\\": \\"\\$PROCESSES\\", \\"tcp_conn\\": \\"\\$TCP_CONN\\", \\"udp_conn\\": \\"\\$UDP_CONN\\", \\"ip_v4\\": \\"\\$IPV4\\", \\"ip_v6\\": \\"\\$IPV6\\", \\"ping_ct\\": \\"\\$PING_CT\\", \\"ping_cu\\": \\"\\$PING_CU\\", \\"ping_cm\\": \\"\\$PING_CM\\", \\"ping_bd\\": \\"\\$PING_BD\\", \\"virt\\": \\"\\$VIRT\\" }}"\n  ${cmdApp} -s -X POST -H "Content-Type: application/json" -d "\\$PAYLOAD" "\\$WORKER_URL" > /dev/null\n  sleep ${reportInterval}\ndone\nEOF\nchmod +x /usr/local/bin/cf-probe.sh\n`;
-        if (osType === 'alpine') { bashScript += `cat << 'EOF' > /etc/init.d/cf-probe\n#!/sbin/openrc-run\nname="cf-probe"\ncommand="/usr/local/bin/cf-probe.sh"\ncommand_background="yes"\npidfile="/run/cf-probe.pid"\nEOF\nchmod +x /etc/init.d/cf-probe\nrc-update add cf-probe default\nrc-service cf-probe restart\necho "✅ Alpine 探针安装成功！"\n`; } 
-        else { bashScript += `cat << EOF > /etc/systemd/system/cf-probe.service\n[Unit]\nDescription=Cloudflare Worker Probe Agent\nAfter=network.target\n[Service]\nExecStart=/usr/local/bin/cf-probe.sh\nRestart=always\nUser=root\n[Install]\nWantedBy=multi-user.target\nEOF\n${sh_sys} daemon-reload\n${sh_sys} enable cf-probe.service\n${sh_sys} restart cf-probe.service\necho "✅ Linux 探针安装成功！"\n`; }
-        return new Response(bashScript, { headers: { 'Content-Type': 'text/plain;charset=UTF-8' } });
-    }
-
     // --- 以下为需要管理员权限的 API ---
     if (!(await verifyAuth(request.headers.get("Authorization"), db, env))) return Response.json({error: "Unauthorized"}, {status: 401});
 
-    // 5. 探针后台管理：拉取所有数据(含隐藏)
+    // 3. 探针后台管理：拉取所有数据
     if (method === 'GET' && subPath === 'admin/data') {
         const settings = {};
         try { const { results } = await db.prepare('SELECT * FROM probe_settings').all(); if (results) results.forEach(r => settings[r.key] = r.value); } catch(e){}
@@ -189,14 +114,14 @@ async function handleProbeAPI(request, env, context, pathArray) {
         return Response.json({ settings, servers });
     }
     
-    // 6. 探针后台管理：修改设置
+    // 4. 探针后台管理：修改设置
     if (method === 'POST' && subPath === 'admin/settings') {
         const { settings } = await request.json();
         for (const [k, v] of Object.entries(settings)) { await db.prepare('INSERT INTO probe_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind(k, v).run(); }
         return Response.json({ success: true });
     }
 
-    // 7. 探针后台管理：增删改节点
+    // 5. 探针后台管理：增删改节点
     if (method === 'POST' && subPath === 'admin/server') {
         const data = await request.json(); const id = crypto.randomUUID();
         await db.prepare(`INSERT INTO probe_servers (id, name, cpu, ram, disk, load_avg, uptime, last_updated, ram_total, net_rx, net_tx, net_in_speed, net_out_speed, os, cpu_info, arch, boot_time, ram_used, swap_total, swap_used, disk_total, disk_used, processes, tcp_conn, udp_conn, country, ip_v4, ip_v6, server_group, price, expire_date, bandwidth, traffic_limit, ping_ct, ping_cu, ping_cm, ping_bd, monthly_rx, monthly_tx, last_rx, last_tx, reset_month, agent_os, history, is_hidden) VALUES (?, ?, '0', '0', '0', '0', '0', 0, '0', '0', '0', '0', '0', '', '', '', '', '0', '0', '0', '0', '0', '0', '0', '0', '', '0', '0', '默认分组', '免费', '', '', '', '0', '0', '0', '0', '0', '0', '0', '0', '', ?, '{}', 'false')`).bind(id, data.name || 'New Server', data.agent_os || 'debian').run();
@@ -236,16 +161,86 @@ export async function onRequest(context) {
         return Response.json({ success: true });
     }
 
+    // 🌟 Agent 统一探针与管理上报接口 (全能入口，单次上报双向分发)
     if (action === "report" && method === "POST") {
         if (!(await verifyAuth(request.headers.get("Authorization"), db, env))) return new Response("Unauthorized", { status: 401 });
         const data = await request.json(); 
         const nowMs = Date.now();
-        try { await db.prepare("UPDATE servers SET cpu=?, mem=?, disk=?, load=?, uptime=?, net_in_speed=?, net_out_speed=?, tcp_conn=?, udp_conn=?, last_report=?, alert_sent=0 WHERE ip=?").bind(data.cpu||0, data.mem||0, data.disk||0, data.load||'', data.uptime||'', data.net_in_speed||0, data.net_out_speed||0, data.tcp_conn||0, data.udp_conn||0, nowMs, data.ip).run(); } catch (e) { await ensureDbSchema(db); await db.prepare("UPDATE servers SET cpu=?, mem=?, disk=?, load=?, uptime=?, net_in_speed=?, net_out_speed=?, tcp_conn=?, udp_conn=?, last_report=?, alert_sent=0 WHERE ip=?").bind(data.cpu||0, data.mem||0, data.disk||0, data.load||'', data.uptime||'', data.net_in_speed||0, data.net_out_speed||0, data.tcp_conn||0, data.udp_conn||0, nowMs, data.ip).run(); }
+        const vpsIp = data.ip;
+
+        // 1. 更新 KUI 核心节点数据库
+        try { 
+            await db.prepare("UPDATE servers SET cpu=?, mem=?, disk=?, load=?, uptime=?, net_in_speed=?, net_out_speed=?, tcp_conn=?, udp_conn=?, last_report=?, alert_sent=0 WHERE ip=?")
+                    .bind(data.cpu||0, data.mem||0, data.disk||0, data.load||'', data.uptime||'', data.net_in_speed||0, data.net_out_speed||0, data.tcp_conn||0, data.udp_conn||0, nowMs, vpsIp).run(); 
+        } catch (e) { 
+            await ensureDbSchema(db); 
+            await db.prepare("UPDATE servers SET cpu=?, mem=?, disk=?, load=?, uptime=?, net_in_speed=?, net_out_speed=?, tcp_conn=?, udp_conn=?, last_report=?, alert_sent=0 WHERE ip=?")
+                    .bind(data.cpu||0, data.mem||0, data.disk||0, data.load||'', data.uptime||'', data.net_in_speed||0, data.net_out_speed||0, data.tcp_conn||0, data.udp_conn||0, nowMs, vpsIp).run(); 
+        }
+
+        // 2. 桥接同步到 CF 探针大盘数据库
+        try {
+            const kuiServer = await db.prepare('SELECT name FROM servers WHERE ip = ?').bind(vpsIp).first();
+            const serverName = kuiServer ? kuiServer.name : vpsIp;
+            let countryCode = request.cf && request.cf.country ? request.cf.country : 'XX'; 
+            if (countryCode.toUpperCase() === 'TW') countryCode = 'CN';
+
+            const probeServer = await db.prepare('SELECT * FROM probe_servers WHERE id = ?').bind(vpsIp).first();
+            const localNow = new Date(nowMs + 8 * 60 * 60000); 
+            const currentMonthStr = `${localNow.getFullYear()}-${localNow.getMonth() + 1}`;
+            
+            let monthly_rx = 0, monthly_tx = 0, last_rx = 0, last_tx = 0;
+            let reset_month = currentMonthStr;
+            let history = {};
+
+            if (!probeServer) {
+                await db.prepare(`INSERT INTO probe_servers (id, name, cpu, ram, disk, load_avg, uptime, last_updated, ram_total, net_rx, net_tx, net_in_speed, net_out_speed, os, cpu_info, arch, boot_time, ram_used, swap_total, swap_used, disk_total, disk_used, processes, tcp_conn, udp_conn, country, ip_v4, ip_v6, server_group, price, expire_date, bandwidth, traffic_limit, ping_ct, ping_cu, ping_cm, ping_bd, monthly_rx, monthly_tx, last_rx, last_tx, reset_month, agent_os, history, is_hidden, virt) VALUES (?, ?, '0', '0', '0', '0', '0', 0, '0', '0', '0', '0', '0', '', '', '', '', '0', '0', '0', '0', '0', '0', '0', '0', ?, '1', '0', '默认分组', '免费', '', '', '', '0', '0', '0', '0', '0', '0', '0', '0', ?, 'debian', '{}', 'false', '')`).bind(vpsIp, serverName, countryCode, currentMonthStr).run();
+            } else {
+                monthly_rx = parseFloat(probeServer.monthly_rx || '0'); monthly_tx = parseFloat(probeServer.monthly_tx || '0');
+                last_rx = parseFloat(probeServer.last_rx || '0'); last_tx = parseFloat(probeServer.last_tx || '0');
+                reset_month = probeServer.reset_month || currentMonthStr;
+                
+                let autoReset = 'false';
+                try { const r = await db.prepare("SELECT value FROM probe_settings WHERE key = 'auto_reset_traffic'").first(); if (r) autoReset = r.value; } catch(e){}
+                if (autoReset === 'true' && currentMonthStr !== reset_month) { monthly_rx = 0; monthly_tx = 0; reset_month = currentMonthStr; }
+                try { history = JSON.parse(probeServer.history || '{}'); } catch(e) {}
+            }
+
+            const current_rx = parseFloat(data.net_rx || '0'); const current_tx = parseFloat(data.net_tx || '0');
+            if (current_rx >= last_rx) monthly_rx += (current_rx - last_rx); else monthly_rx += current_rx;
+            if (current_tx >= last_tx) monthly_tx += (current_tx - last_tx); else monthly_tx += current_tx;
+            last_rx = current_rx; last_tx = current_tx;
+
+            const lastHistTime = history.last_time || 0;
+            if (nowMs - lastHistTime >= 300000 || !history.time) {
+                const maxPoints = 288; 
+                const updateArr = (arr, val) => { if (!Array.isArray(arr)) arr = []; arr.push(val); if (arr.length > maxPoints) arr.shift(); return arr; };
+                const updateLabels = (arr) => { if (!Array.isArray(arr)) arr = []; const d = new Date(nowMs + 8 * 60 * 60000); arr.push(d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0')); if (arr.length > maxPoints) arr.shift(); return arr; };
+                history.cpu = updateArr(history.cpu, parseFloat(data.cpu) || 0); history.ram = updateArr(history.ram, parseFloat(data.mem) || 0); history.proc = updateArr(history.proc, parseInt(data.processes) || 0); 
+                history.net_in = updateArr(history.net_in, parseFloat(data.net_in_speed) || 0); history.net_out = updateArr(history.net_out, parseFloat(data.net_out_speed) || 0); 
+                history.tcp = updateArr(history.tcp, parseInt(data.tcp_conn) || 0); history.udp = updateArr(history.udp, parseInt(data.udp_conn) || 0); 
+                history.ping_ct = updateArr(history.ping_ct, parseInt(data.ping_ct) || 0); history.ping_cu = updateArr(history.ping_cu, parseInt(data.ping_cu) || 0); history.ping_cm = updateArr(history.ping_cm, parseInt(data.ping_cm) || 0); history.ping_bd = updateArr(history.ping_bd, parseInt(data.ping_bd) || 0); 
+                history.time = updateLabels(history.time); history.last_time = nowMs;
+            }
+
+            await db.prepare(`UPDATE probe_servers SET cpu=?, ram=?, disk=?, load_avg=?, uptime=?, last_updated=?, ram_total=?, net_rx=?, net_tx=?, net_in_speed=?, net_out_speed=?, os=?, cpu_info=?, arch=?, boot_time=?, ram_used=?, swap_total=?, swap_used=?, disk_total=?, disk_used=?, processes=?, tcp_conn=?, udp_conn=?, ping_ct=?, ping_cu=?, ping_cm=?, ping_bd=?, monthly_rx=?, monthly_tx=?, last_rx=?, last_tx=?, reset_month=?, history=?, virt=? WHERE id=?`)
+                    .bind(data.cpu||0, data.mem||0, data.disk||0, data.load||'', data.uptime||'', nowMs, data.ram_total||'0', data.net_rx||'0', data.net_tx||'0', data.net_in_speed||0, data.net_out_speed||0, data.os||'', data.cpu_info||'', data.arch||'', data.boot_time||'', data.ram_used||'0', data.swap_total||'0', data.swap_used||'0', data.disk_total||'0', data.disk_used||'0', data.processes||'0', data.tcp_conn||0, data.udp_conn||0, data.ping_ct||'0', data.ping_cu||'0', data.ping_cm||'0', data.ping_bd||'0', monthly_rx.toString(), monthly_tx.toString(), last_rx.toString(), last_tx.toString(), reset_month, JSON.stringify(history), data.virt||'', vpsIp).run();
+
+        } catch (e) { console.error("探针数据同步失败:", e); }
+
+        // 3. 处理代理节点流量与协议更新
         const stmts = []; let totalDelta = 0;
-        if (data.node_traffic && data.node_traffic.length > 0) { for (let nt of data.node_traffic) { stmts.push(db.prepare("UPDATE nodes SET traffic_used = traffic_used + ? WHERE id = ?").bind(nt.delta_bytes, nt.id)); stmts.push(db.prepare(`UPDATE users SET traffic_used = traffic_used + ? WHERE username = (SELECT username FROM nodes WHERE id = ?)`).bind(nt.delta_bytes, nt.id)); totalDelta += nt.delta_bytes; } }
+        if (data.node_traffic && data.node_traffic.length > 0) { 
+            for (let nt of data.node_traffic) { 
+                stmts.push(db.prepare("UPDATE nodes SET traffic_used = traffic_used + ? WHERE id = ?").bind(nt.delta_bytes, nt.id)); 
+                stmts.push(db.prepare(`UPDATE users SET traffic_used = traffic_used + ? WHERE username = (SELECT username FROM nodes WHERE id = ?)`).bind(nt.delta_bytes, nt.id)); 
+                totalDelta += nt.delta_bytes; 
+            } 
+        }
         if (data.argo_urls && data.argo_urls.length > 0) { for (let argo of data.argo_urls) { stmts.push(db.prepare("UPDATE nodes SET sni = ? WHERE id = ? AND protocol = 'VLESS-Argo' AND sni != ?").bind(argo.url, argo.id, argo.url)); } }
-        if (totalDelta > 0) { stmts.push(db.prepare("INSERT INTO traffic_stats (ip, delta_bytes, timestamp) VALUES (?, ?, ?)").bind(data.ip, totalDelta, nowMs)); }
+        if (totalDelta > 0) { stmts.push(db.prepare("INSERT INTO traffic_stats (ip, delta_bytes, timestamp) VALUES (?, ?, ?)").bind(vpsIp, totalDelta, nowMs)); }
         if (stmts.length > 0) await db.batch(stmts);
+        
         let fastMode = false; try { const uiActive = await db.prepare("SELECT ts FROM sys_config WHERE key = 'ui_active'").first(); if (uiActive && (nowMs - uiActive.ts < 20000)) fastMode = true; } catch(e) {}
         return Response.json({ success: true, fast_mode: fastMode });
     }
