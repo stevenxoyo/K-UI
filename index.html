@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>KUI Serverless 极速聚合面板</title>
-    <!-- 核心依赖库 -->
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/tweetnacl@1.0.3/nacl-fast.min.js"></script>
@@ -22,7 +21,6 @@
     
     <div id="app" v-cloak class="max-w-6xl mx-auto space-y-8">
         
-        <!-- ================= 登录界面 ================= -->
         <div v-if="!isLoggedIn" class="bg-white/60 backdrop-blur-xl border border-white/80 p-10 rounded-[2.5rem] shadow-2xl shadow-indigo-100/50 max-w-sm mx-auto mt-24 transform transition-all">
             <div class="w-16 h-16 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-2xl mx-auto mb-6 shadow-lg flex items-center justify-center"><span class="text-white text-3xl">✨</span></div>
             <h2 class="text-3xl font-black mb-8 text-center bg-clip-text text-transparent bg-gradient-to-r from-slate-800 to-slate-600">系统准入</h2>
@@ -31,7 +29,6 @@
             <button @click="login" class="w-full bg-gradient-to-r from-slate-800 to-black text-white p-4 rounded-2xl font-bold shadow-lg hover:scale-[1.02] active:scale-95 transition-all">登 入</button>
         </div>
 
-        <!-- ================= 面板主界面 ================= -->
         <div v-else class="space-y-8 animate-fade-in">
             
             <div class="bg-white/70 backdrop-blur-xl border border-white/80 p-4 md:px-6 rounded-[2rem] shadow-xl shadow-slate-200/50 flex flex-col lg:flex-row justify-between items-center sticky top-4 z-50 gap-4">
@@ -60,25 +57,28 @@
                 </div>
             </div>
 
-            <!-- 核心导航区 -->
             <div class="flex justify-center mb-4">
                 <div class="bg-slate-200/50 p-1.5 rounded-full flex flex-wrap justify-center gap-1 backdrop-blur-sm border border-white/50 shadow-inner">
                     <template v-if="role === 'admin'">
                         <button @click="activeTab = 'nodes'" :class="activeTab === 'nodes' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'" class="px-6 md:px-8 py-2.5 rounded-full font-bold transition-all text-sm md:text-base">服务器与节点</button>
                         <button @click="activeTab = 'users'" :class="activeTab === 'users' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'" class="px-6 md:px-8 py-2.5 rounded-full font-bold transition-all text-sm md:text-base">多用户管理</button>
+                        
+                        <a href="/api/probe/admin" target="_blank" class="px-6 md:px-8 py-2.5 rounded-full font-bold transition-all text-sm md:text-base text-emerald-600 hover:bg-emerald-50 shadow-sm border border-transparent hover:border-emerald-200">📊 探针管理</a>
+                        
                         <button @click="activeTab = 'settings'" :class="activeTab === 'settings' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'" class="px-6 md:px-8 py-2.5 rounded-full font-bold transition-all text-sm md:text-base">⚙️ 系统设置</button>
                     </template>
                     <template v-if="role === 'user'">
                         <button @click="activeTab = 'dashboard'" :class="activeTab === 'dashboard' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'" class="px-6 md:px-8 py-2.5 rounded-full font-bold transition-all text-sm md:text-base">我的主页</button>
+                        
+                        <a href="/api/probe" target="_blank" class="px-6 md:px-8 py-2.5 rounded-full font-bold transition-all text-sm md:text-base text-blue-600 hover:bg-blue-50 shadow-sm border border-transparent hover:border-blue-200">🌐 探针大盘</a>
+                        
                         <button @click="activeTab = 'settings'" :class="activeTab === 'settings' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'" class="px-6 md:px-8 py-2.5 rounded-full font-bold transition-all text-sm md:text-base">⚙️ 系统设置</button>
                     </template>
                 </div>
             </div>
 
-            <!-- ================= 管理员专属板块 ================= -->
             <div v-if="role === 'admin'" class="space-y-8">
                 
-                <!-- 大盘统计 -->
                 <div v-if="activeTab === 'nodes'" class="grid grid-cols-2 md:grid-cols-4 gap-4">
                     <div class="bg-white/60 backdrop-blur-xl p-5 rounded-[2rem] border border-white shadow-lg shadow-indigo-100/30 text-center">
                         <div class="text-[10px] text-slate-400 font-bold mb-1 tracking-widest">ONLINE SERVERS</div>
@@ -98,7 +98,6 @@
                     </div>
                 </div>
 
-                <!-- 用户管理板块 -->
                 <div v-if="activeTab === 'users'" class="space-y-6">
                     <div class="bg-white/60 backdrop-blur-xl p-6 md:p-8 rounded-[2rem] border border-white shadow-xl shadow-slate-200/40 flex flex-col xl:flex-row gap-4 items-end">
                         <div class="flex-1 w-full"><label class="block text-xs font-bold text-slate-400 mb-2 pl-2">新建用户名</label><input v-model="newUser.username" placeholder="如: user01" class="w-full bg-white/50 border border-white p-3 rounded-2xl transition hover:bg-white focus:bg-white"></div>
@@ -131,9 +130,7 @@
                     </div>
                 </div>
 
-                <!-- 服务器与节点管理板块 -->
                 <div v-if="activeTab === 'nodes'" class="space-y-8">
-                    <!-- 接入机器表单 -->
                     <div class="bg-white/60 backdrop-blur-xl p-6 md:p-8 rounded-[2rem] border border-white shadow-xl shadow-slate-200/40 flex flex-col md:flex-row gap-4 items-end">
                         <div class="flex-1"><label class="block text-xs font-bold text-slate-400 mb-2 pl-2">服务器别名</label><input v-model="newVps.name" placeholder="例如: 日本软银 01" class="w-full bg-white/50 border border-white p-3 rounded-2xl transition hover:bg-white focus:bg-white"></div>
                         <div class="flex-1"><label class="block text-xs font-bold text-slate-400 mb-2 pl-2">公网 IP</label><input v-model="newVps.ip" placeholder="8.8.8.8" class="w-full bg-white/50 border border-white p-3 rounded-2xl transition hover:bg-white focus:bg-white"></div>
@@ -146,11 +143,9 @@
                         <button @click="addVps" class="bg-slate-800 text-white px-8 py-3.5 rounded-2xl font-bold hover:bg-black transition-all shadow-lg hover:scale-105 whitespace-nowrap">接入机器</button>
                     </div>
 
-                    <!-- 机器列表大网格 -->
                     <div class="grid grid-cols-1 xl:grid-cols-2 gap-8">
                         <div v-for="vps in servers" :key="vps.ip" class="bg-white/70 backdrop-blur-xl rounded-[2rem] border border-white shadow-xl shadow-slate-200/40 flex flex-col overflow-hidden transition-all hover:shadow-2xl">
                             
-                            <!-- 机器头部监控数据 -->
                             <div class="p-6 md:p-8 relative">
                                 <div class="flex justify-between items-start mb-4">
                                     <div>
@@ -196,7 +191,6 @@
 
                             <div class="px-6 md:px-8 pb-4">
                                 
-                                <!-- 🌟 彻底强化：精简版 8大协议极速部署模块 -->
                                 <div class="bg-indigo-50/70 border-2 border-dashed border-indigo-200 p-6 rounded-[1.5rem] mb-2 relative overflow-hidden group shadow-sm hover:border-indigo-300 transition-all">
                                     <div class="absolute top-0 right-0 bg-indigo-500 text-white text-[10px] font-black px-3 py-1 rounded-bl-xl shadow-sm">QUICK INSTALL</div>
                                     <h4 class="font-black text-indigo-800 text-lg mb-2 flex items-center gap-2">🚀 极速全量节点下发 (8合1)</h4>
@@ -221,9 +215,6 @@
                                         </div>
                                     </div>
                                 </div>
-                                <!-- 🌟 极速全量模块结束 -->
-
-                                <!-- 保留手动精细化表单供特殊场景使用 -->
                                 <div class="bg-gradient-to-br from-white/80 to-white/40 p-5 rounded-[1.5rem] border border-white shadow-sm mt-4">
                                     <div class="text-xs font-bold text-slate-400 mb-2 pl-1">手动单节点精细化下发</div>
                                     <select v-model="newNodeParams[vps.ip].username" class="w-full border-none bg-indigo-50/50 text-indigo-700 font-bold text-sm p-3 rounded-xl outline-none mb-3">
@@ -322,10 +313,8 @@
                 </div>
             </div>
 
-            <!-- ================= 普通用户受限视图 ================= -->
             <div v-if="role === 'user'" class="space-y-8 animate-fade-in">
                 
-                <!-- 用户专属大盘区 -->
                 <div v-if="activeTab === 'dashboard'" class="space-y-8">
                     <div class="bg-white/60 backdrop-blur-xl p-10 md:p-16 rounded-[3rem] shadow-2xl border border-white text-center relative overflow-hidden">
                         <div class="absolute top-0 left-1/2 -translate-x-1/2 w-full max-w-lg h-32 bg-indigo-400/20 blur-3xl rounded-full pointer-events-none"></div>
@@ -350,7 +339,6 @@
                 </div>
             </div>
 
-            <!-- ================= 系统设置板块 ================= -->
             <div v-if="activeTab === 'settings'" class="space-y-6">
                 
                 <template v-if="role === 'admin'">
@@ -397,7 +385,6 @@
         </div>
     </div>
 
-    <!-- ================= 脚本逻辑区 ================= -->
     <script>
         const { createApp, ref, reactive, onMounted, onUnmounted, nextTick, computed, watch } = Vue;
         
