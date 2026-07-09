@@ -1,3 +1,5 @@
+dev分支已推送完整功能KUI面板
+
 # ⚡ KUI x Server Monitor Pro - Cluster Gateway
 
 ![Vue 3](https://img.shields.io/badge/Frontend-Vue%203-4FC08D?logo=vuedotjs)
