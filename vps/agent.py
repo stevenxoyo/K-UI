@@ -231,6 +231,17 @@ def process_argo_nodes(configs):
             del argo_tunnels[port]
     return argo_urls
 
+def find_acme_certificate(sni):
+    """Return a trusted ACME certificate for an exact, safe hostname."""
+    if not re.fullmatch(r"(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}", sni):
+        return None
+    live_dir = os.path.join("/etc/letsencrypt/live", sni)
+    cert_path = os.path.join(live_dir, "fullchain.pem")
+    key_path = os.path.join(live_dir, "privkey.pem")
+    if os.path.isfile(cert_path) and os.path.isfile(key_path):
+        return cert_path, key_path
+    return None
+
 def build_singbox_config(nodes):
     singbox_config = {
         "log": {"level": "warn"},
@@ -246,17 +257,21 @@ def build_singbox_config(nodes):
         clean_uuid = node['uuid'].replace('-', '')
         
         if proto in ["Hysteria2", "TUIC", "Trojan", "VLESS-WS-TLS", "AnyTLS", "Naive"]:
-            cert_path, key_path = f"/opt/kui/cert_{node['id']}.pem", f"/opt/kui/key_{node['id']}.pem"
-            active_certs.extend([f"cert_{node['id']}.pem", f"key_{node['id']}.pem"])
-            if not os.path.exists(cert_path):
-                parts = sni.split('.'); cn = f"{parts[-2]}.{parts[-1]}" if len(parts) >= 2 else sni
-                conf_path = f"/opt/kui/cert_{node['id']}.conf"
-                with open(conf_path, "w") as f: f.write(f"[req]\ndistinguished_name = req_distinguished_name\nx509_extensions = v3_req\nprompt = no\n[req_distinguished_name]\nCN = {cn}\n[v3_req]\nsubjectAltName = @alt_names\n[alt_names]\nDNS = {sni}\n")
-                os.system(f"openssl ecparam -genkey -name prime256v1 -out {key_path} >/dev/null 2>&1")
-                os.system(f"openssl req -new -x509 -days 36500 -key {key_path} -out {cert_path} -config {conf_path} -extensions v3_req >/dev/null 2>&1")
-                os.system(f"chmod 644 {cert_path} {key_path}")
-                try: os.remove(conf_path)
-                except: pass
+            acme_certificate = find_acme_certificate(sni)
+            if acme_certificate:
+                cert_path, key_path = acme_certificate
+            else:
+                cert_path, key_path = f"/opt/kui/cert_{node['id']}.pem", f"/opt/kui/key_{node['id']}.pem"
+                active_certs.extend([f"cert_{node['id']}.pem", f"key_{node['id']}.pem"])
+                if not os.path.exists(cert_path):
+                    parts = sni.split('.'); cn = f"{parts[-2]}.{parts[-1]}" if len(parts) >= 2 else sni
+                    conf_path = f"/opt/kui/cert_{node['id']}.conf"
+                    with open(conf_path, "w") as f: f.write(f"[req]\ndistinguished_name = req_distinguished_name\nx509_extensions = v3_req\nprompt = no\n[req_distinguished_name]\nCN = {cn}\n[v3_req]\nsubjectAltName = @alt_names\n[alt_names]\nDNS = {sni}\n")
+                    os.system(f"openssl ecparam -genkey -name prime256v1 -out {key_path} >/dev/null 2>&1")
+                    os.system(f"openssl req -new -x509 -days 36500 -key {key_path} -out {cert_path} -config {conf_path} -extensions v3_req >/dev/null 2>&1")
+                    os.system(f"chmod 644 {cert_path} {key_path}")
+                    try: os.remove(conf_path)
+                    except: pass
         
         if proto == "VLESS": singbox_config["inbounds"].append({"type": "vless", "tag": in_tag, "listen": "::", "listen_port": port, "users": [{"uuid": node["uuid"]}]})
         elif proto in ["XTLS-Reality", "Reality"]: singbox_config["inbounds"].append({"type": "vless", "tag": in_tag, "listen": "::", "listen_port": port, "users": [{"uuid": node["uuid"], "flow": "xtls-rprx-vision"}], "tls": {"enabled": True, "server_name": sni, "reality": {"enabled": True, "handshake": {"server": sni, "server_port": 443}, "private_key": node["private_key"], "short_id": [node["short_id"]]}}})
