@@ -427,7 +427,7 @@ export async function onRequest(context) {
                 case "Hysteria2": link = `hysteria2://${encodedUuid}@${node.vps_ip}:${node.port}/?sni=${encodedSni}&alpn=h3#${remark}`; break;
                 case "TUIC": link = `tuic://${encodedUuid}:${encodedPassword}@${node.vps_ip}:${node.port}?sni=${encodedSni}&congestion_control=bbr&alpn=h3&allow_insecure=1#${remark}`; break;
                 case "Trojan": link = `trojan://${encodedPassword}@${node.vps_ip}:${node.port}?security=tls&sni=${encodedSni}&type=tcp#${remark}`; break;
-                case "H2-Reality": case "HTTPUpgrade-Reality": link = `vless://${node.uuid}@${node.vps_ip}:${node.port}?encryption=none&security=reality&sni=${encodedSni}&fp=chrome&pbk=${node.public_key}&sid=${node.short_id || ""}&type=httpupgrade&path=%2F#${remark}`; break;
+                case "VLESS-HTTPUpgrade-TLS": link = `vless://${node.uuid}@${node.vps_ip}:${node.port}?encryption=none&security=tls&sni=${encodedSni}&fp=chrome&type=httpupgrade&path=%2F#${remark}`; break;
                 case "gRPC-Reality": link = `vless://${node.uuid}@${node.vps_ip}:${node.port}?encryption=none&security=reality&sni=${node.sni}&fp=chrome&pbk=${node.public_key}&sid=${node.short_id || ""}&type=grpc&serviceName=grpc#${remark}`; break;
                 case "AnyTLS": link = `anytls://${encodedPassword}@${node.vps_ip}:${node.port}?security=tls&sni=${encodedSni}&insecure=1#${remark}`; break;
                 case "Naive": link = `naive+https://${encodedUuid}:${encodedPassword}@${node.vps_ip}:${node.port}?security=tls&sni=${encodedSni}#${remark}`; break;
@@ -447,8 +447,8 @@ export async function onRequest(context) {
                         cProxy += `\n    tls: true\n    flow: xtls-rprx-vision\n    servername: ${node.sni}\n    client-fingerprint: chrome\n    reality-opts:\n      public-key: ${node.public_key}\n      short-id: ${node.short_id || ""}`;
                     } else if (node.protocol === "gRPC-Reality") {
                         cProxy += `\n    tls: true\n    servername: ${node.sni}\n    client-fingerprint: chrome\n    network: grpc\n    grpc-opts:\n      grpc-service-name: grpc\n    reality-opts:\n      public-key: ${node.public_key}\n      short-id: ${node.short_id || ""}`;
-                    } else if (node.protocol === "H2-Reality" || node.protocol === "HTTPUpgrade-Reality") {
-                        cProxy += `\n    tls: true\n    servername: ${node.sni}\n    client-fingerprint: chrome\n    network: httpupgrade\n    http-upgrade-opts:\n      path: /\n    reality-opts:\n      public-key: ${node.public_key}\n      short-id: ${node.short_id || ""}`;
+                    } else if (node.protocol === "VLESS-HTTPUpgrade-TLS") {
+                        cProxy += `\n    tls: true\n    servername: ${node.sni}\n    client-fingerprint: chrome\n    network: httpupgrade\n    http-upgrade-opts:\n      path: /`;
                     } else if (node.protocol === 'VLESS-Argo' && !node.sni.includes('等待')) {
                         cProxy += `\n    tls: true\n    servername: ${node.sni}\n    network: ws\n    ws-opts:\n      path: "/"\n      headers:\n        Host: ${node.sni}`;
                     }
