@@ -414,6 +414,9 @@ export async function onRequest(context) {
             const vpsInfo = await db.prepare("SELECT name FROM servers WHERE ip = ?").bind(node.vps_ip).first(); 
             const rawRemark = `${vpsInfo ? vpsInfo.name : 'KUI'} | ${node.protocol}_${node.port}`; 
             const remark = encodeURIComponent(rawRemark); 
+            const encodedSni = encodeURIComponent(node.sni || '');
+            const encodedPassword = encodeURIComponent(node.private_key || '');
+            const encodedUuid = encodeURIComponent(node.uuid || '');
             let link = "";
             let cProxy = "";
 
@@ -421,13 +424,13 @@ export async function onRequest(context) {
             switch (node.protocol) {
                 case "VLESS": link = `vless://${node.uuid}@${node.vps_ip}:${node.port}?encryption=none&security=none&type=tcp#${remark}`; break;
                 case "XTLS-Reality": case "Reality": link = `vless://${node.uuid}@${node.vps_ip}:${node.port}?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${node.sni}&fp=chrome&pbk=${node.public_key}&sid=${node.short_id || ""}&type=tcp&headerType=none#${remark}`; break;
-                case "Hysteria2": link = `hysteria2://${node.uuid}@${node.vps_ip}:${node.port}/?sni=${node.sni}&alpn=h3#${remark}`; break;
-                case "TUIC": link = `tuic://${node.uuid}:${node.private_key}@${node.vps_ip}:${node.port}?sni=${node.sni}&congestion_control=bbr&alpn=h3&allow_insecure=1#${remark}`; break;
-                case "Trojan": link = `trojan://${node.private_key}@${node.vps_ip}:${node.port}?security=tls&sni=${node.sni}&type=tcp#${remark}`; break;
+                case "Hysteria2": link = `hysteria2://${encodedUuid}@${node.vps_ip}:${node.port}/?sni=${encodedSni}&alpn=h3#${remark}`; break;
+                case "TUIC": link = `tuic://${encodedUuid}:${encodedPassword}@${node.vps_ip}:${node.port}?sni=${encodedSni}&congestion_control=bbr&alpn=h3&allow_insecure=1#${remark}`; break;
+                case "Trojan": link = `trojan://${encodedPassword}@${node.vps_ip}:${node.port}?security=tls&sni=${encodedSni}&type=tcp#${remark}`; break;
                 case "H2-Reality": link = `vless://${node.uuid}@${node.vps_ip}:${node.port}?encryption=none&security=reality&sni=${node.sni}&fp=chrome&pbk=${node.public_key}&sid=${node.short_id || ""}&type=http#${remark}`; break;
                 case "gRPC-Reality": link = `vless://${node.uuid}@${node.vps_ip}:${node.port}?encryption=none&security=reality&sni=${node.sni}&fp=chrome&pbk=${node.public_key}&sid=${node.short_id || ""}&type=grpc&serviceName=grpc#${remark}`; break;
-                case "AnyTLS": link = `anytls://${node.private_key}@${node.vps_ip}:${node.port}?security=tls&sni=${node.sni}&insecure=1#${remark}`; break;
-                case "Naive": link = `naive+https://${node.uuid}:${node.private_key}@${node.vps_ip}:${node.port}?security=tls&sni=${node.sni}#${remark}`; break;
+                case "AnyTLS": link = `anytls://${encodedPassword}@${node.vps_ip}:${node.port}?security=tls&sni=${encodedSni}&insecure=1#${remark}`; break;
+                case "Naive": link = `naive+https://${encodedUuid}:${encodedPassword}@${node.vps_ip}:${node.port}?security=tls&sni=${encodedSni}#${remark}`; break;
                 case "Socks5": link = `socks5://${btoa(`${node.uuid}:${node.private_key}`)}@${node.vps_ip}:${node.port}#${remark}`; break;
                 case "VLESS-Argo": if (!node.sni.includes('等待')) link = `vless://${node.uuid}@${node.sni}:443?encryption=none&security=tls&type=ws&host=${node.sni}&path=%2F#${remark}-Argo`; break;
             }
