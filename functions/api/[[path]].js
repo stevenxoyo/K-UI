@@ -8,9 +8,37 @@ async function sha256(text) {
     return Array.from(new Uint8Array(buffer)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+function isValidIPv4(ip) {
+    const parts = String(ip || '').split('.');
+    return parts.length === 4 && parts.every(part => /^\d{1,3}$/.test(part) && Number(part) >= 0 && Number(part) <= 255);
+}
+
+function normalizeCertificateDomain(domain, env) {
+    const hostname = String(domain || '').trim().toLowerCase().replace(/\.$/, '');
+    const zone = String(env.CF_DNS_ZONE || '').trim().toLowerCase().replace(/^\.+|\.+$/g, '');
+    const hostnamePattern = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+    if (!zone || !hostnamePattern.test(hostname) || hostname === zone || !hostname.endsWith(`.${zone}`)) return null;
+    return hostname;
+}
+
+async function upsertCloudflareARecord(env, hostname, ip) {
+    if (!env.CF_API_TOKEN || !env.CF_ZONE_ID || !env.CF_DNS_ZONE) throw new Error('Cloudflare DNS automation is not configured. Set CF_API_TOKEN, CF_ZONE_ID and CF_DNS_ZONE.');
+    const baseUrl = `https://api.cloudflare.com/client/v4/zones/${env.CF_ZONE_ID}/dns_records`;
+    const headers = { 'Authorization': `Bearer ${env.CF_API_TOKEN}`, 'Content-Type': 'application/json' };
+    const listResponse = await fetch(`${baseUrl}?type=A&name=${encodeURIComponent(hostname)}`, { headers });
+    const listData = await listResponse.json();
+    if (!listResponse.ok || !listData.success) throw new Error(`Cloudflare DNS lookup failed: ${(listData.errors || []).map(e => e.message).join('; ') || listResponse.status}`);
+    const body = JSON.stringify({ type: 'A', name: hostname, content: ip, ttl: 1, proxied: false, comment: 'Managed by K-UI' });
+    const existing = Array.isArray(listData.result) ? listData.result[0] : null;
+    const response = await fetch(existing ? `${baseUrl}/${existing.id}` : baseUrl, { method: existing ? 'PUT' : 'POST', headers, body });
+    const data = await response.json();
+    if (!response.ok || !data.success) throw new Error(`Cloudflare DNS write failed: ${(data.errors || []).map(e => e.message).join('; ') || response.status}`);
+    return data.result;
+}
+
 async function ensureDbSchema(db) {
     const initQueries = [
-        `CREATE TABLE IF NOT EXISTS servers (ip TEXT PRIMARY KEY, name TEXT NOT NULL, cpu INTEGER DEFAULT 0, mem REAL DEFAULT 0, last_report INTEGER DEFAULT 0, alert_sent INTEGER DEFAULT 0, disk INTEGER DEFAULT 0, load TEXT DEFAULT "", uptime TEXT DEFAULT "", net_in_speed INTEGER DEFAULT 0, net_out_speed INTEGER DEFAULT 0, tcp_conn INTEGER DEFAULT 0, udp_conn INTEGER DEFAULT 0)`,
+        `CREATE TABLE IF NOT EXISTS servers (ip TEXT PRIMARY KEY, name TEXT NOT NULL, cert_domain TEXT DEFAULT '', cpu INTEGER DEFAULT 0, mem REAL DEFAULT 0, last_report INTEGER DEFAULT 0, alert_sent INTEGER DEFAULT 0, disk INTEGER DEFAULT 0, load TEXT DEFAULT "", uptime TEXT DEFAULT "", net_in_speed INTEGER DEFAULT 0, net_out_speed INTEGER DEFAULT 0, tcp_conn INTEGER DEFAULT 0, udp_conn INTEGER DEFAULT 0)`,
         `CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password TEXT NOT NULL, traffic_limit INTEGER DEFAULT 0, traffic_used INTEGER DEFAULT 0, expire_time INTEGER DEFAULT 0, enable INTEGER DEFAULT 1, sub_token TEXT)`,
         `CREATE TABLE IF NOT EXISTS nodes (id TEXT PRIMARY KEY, uuid TEXT NOT NULL, vps_ip TEXT NOT NULL, protocol TEXT NOT NULL, port INTEGER NOT NULL, sni TEXT, private_key TEXT, public_key TEXT, short_id TEXT, relay_type TEXT, target_ip TEXT, target_port INTEGER, target_id TEXT, enable INTEGER DEFAULT 1, traffic_used INTEGER DEFAULT 0, traffic_limit INTEGER DEFAULT 0, expire_time INTEGER DEFAULT 0, username TEXT DEFAULT 'admin', FOREIGN KEY(vps_ip) REFERENCES servers(ip) ON DELETE CASCADE)`,
         `CREATE TABLE IF NOT EXISTS traffic_stats (id INTEGER PRIMARY KEY AUTOINCREMENT, ip TEXT NOT NULL, delta_bytes INTEGER DEFAULT 0, timestamp INTEGER NOT NULL, FOREIGN KEY(ip) REFERENCES servers(ip) ON DELETE CASCADE)`,
@@ -37,6 +65,7 @@ async function ensureDbSchema(db) {
 
     try { await db.prepare("SELECT username FROM nodes LIMIT 1").first(); } catch (e) { try { await db.prepare("ALTER TABLE nodes ADD COLUMN username TEXT DEFAULT 'admin'").run(); } catch(e){} }
     try { await db.prepare("SELECT disk FROM servers LIMIT 1").first(); } catch (e) { const newCols = ['disk INTEGER DEFAULT 0', 'load TEXT DEFAULT ""', 'uptime TEXT DEFAULT ""', 'net_in_speed INTEGER DEFAULT 0', 'net_out_speed INTEGER DEFAULT 0', 'tcp_conn INTEGER DEFAULT 0', 'udp_conn INTEGER DEFAULT 0']; for (let col of newCols) { try { await db.prepare(`ALTER TABLE servers ADD COLUMN ${col}`).run(); } catch(err){} } }
+    try { await db.prepare("SELECT cert_domain FROM servers LIMIT 1").first(); } catch (e) { try { await db.prepare("ALTER TABLE servers ADD COLUMN cert_domain TEXT DEFAULT ''").run(); } catch(err){} }
     try { await db.prepare("SELECT sub_token FROM users LIMIT 1").first(); } catch (e) { try { await db.prepare("ALTER TABLE users ADD COLUMN sub_token TEXT").run(); } catch(err){} }
     try { await db.prepare("SELECT reset_day FROM probe_servers LIMIT 1").first(); } catch (e) { try { await db.prepare("ALTER TABLE probe_servers ADD COLUMN reset_day TEXT DEFAULT '1'").run(); } catch(e){} }
 
@@ -518,6 +547,7 @@ rules:
     const currentUser = await verifyAuth(request.headers.get("Authorization"), db, env);
     const isAdmin = currentUser === (env.ADMIN_USERNAME || "admin");
     if (!currentUser) return Response.json({ error: "Unauthorized" }, { status: 401 });
+    if (action === "data" || action === "vps") await ensureDbSchema(db);
 
     try {
         if (action === "data") {
@@ -543,7 +573,15 @@ rules:
         }
         
         if (action === "vps" && isAdmin) {
-            if (method === "POST") { const { ip, name } = await request.json(); await db.prepare("INSERT OR IGNORE INTO servers (ip, name, alert_sent) VALUES (?, ?, 0)").bind(ip, name).run(); return Response.json({ success: true }); }
+            if (method === "POST") {
+                const { ip, name, cert_domain } = await request.json();
+                if (!isValidIPv4(ip)) return Response.json({ success: false, error: "Invalid IPv4 address" }, { status: 400 });
+                const certDomain = normalizeCertificateDomain(cert_domain, env);
+                if (!certDomain) return Response.json({ success: false, error: `Certificate domain must be a subdomain of ${env.CF_DNS_ZONE || 'the configured DNS zone'}` }, { status: 400 });
+                await upsertCloudflareARecord(env, certDomain, ip);
+                await db.prepare("INSERT INTO servers (ip, name, cert_domain, alert_sent) VALUES (?, ?, ?, 0) ON CONFLICT(ip) DO UPDATE SET name = excluded.name, cert_domain = excluded.cert_domain").bind(ip, name, certDomain).run();
+                return Response.json({ success: true, cert_domain: certDomain, dns_created: true });
+            }
             if (method === "DELETE") { 
                 const ip = new URL(request.url).searchParams.get("ip"); 
                 await db.batch([ db.prepare("DELETE FROM nodes WHERE vps_ip = ?").bind(ip), db.prepare("DELETE FROM traffic_stats WHERE ip = ?").bind(ip), db.prepare("DELETE FROM servers WHERE ip = ?").bind(ip), db.prepare("DELETE FROM probe_servers WHERE id = ?").bind(ip) ]); 

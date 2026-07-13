@@ -72,6 +72,11 @@ dev分支已推送完整功能KUI面板
    * `ADMIN_PASSWORD` : 后台登录密码 (默认: `admin`，**部署后强烈建议修改**)
    * `TG_BOT_TOKEN` : *(可选)* Telegram 机器人 Token，用于断线告警。
    * `TG_CHAT_ID` : *(可选)* 接收告警的 Telegram Chat ID。
+   * `CF_API_TOKEN` : Cloudflare API Token，只授予目标 Zone 的 **DNS Write** 权限。
+   * `CF_ZONE_ID` : 托管节点域名的 Cloudflare Zone ID。
+   * `CF_DNS_ZONE` : 允许 K-UI 自动管理的根域名，例如 `010234.xyz`。
+
+> `CF_API_TOKEN` 只保存在 Cloudflare Pages 环境变量中，不会出现在前端、部署命令或 VPS 配置里。
 
 ### Step 4: 访问面板
 重新部署一次后，访问您的 Pages 域名即可看到极美的监控大盘。点击右上角“系统准入”登录后台。
@@ -83,12 +88,13 @@ dev分支已推送完整功能KUI面板
 KUI 与 Probe 已实现终极融合，您只需执行一次操作：
 
 1. 登录后台面板，进入 **“服务器与节点”** 页面。
-2. 在“接入机器”表单中，输入您的 VPS 名称、IP，选择系统架构（Debian/Ubuntu 选 Linux，Alpine 选 Alpine），点击 **“接入机器”**。
+2. 在“接入机器”表单中，输入 VPS 名称、IP 和一个该 Zone 下的证书域名（例如 `vps2.010234.xyz`），选择系统架构后点击 **“接入机器”**。
+   - K-UI 会自动创建或更新指向该 VPS 的 Cloudflare A 记录，并保持为仅 DNS（灰云）。
 3. 系统会在页面下方生成该机器专属的 **Deploy Command (安装指令)**。
-4. 复制该指令，使用 SSH 登录到您的 VPS 服务器，粘贴并回车。
+4. 复制该指令，使用 SSH 登录到 VPS，粘贴并回车。安装脚本会等待 DNS 生效，自动申请 Let's Encrypt 证书，并启用续期与 Sing-box 重载。
 5. **搞定！** 
    - 您的机器会**自动**出现在全景探针大盘中并开始上报数据。
-   - 您可以直接在面板使用 **“🚀 爆发下发”** 功能，10 秒内部署 8 大节点阵列！
+   - 您可以选择生成 **3 个稳定节点**、**5 个正式证书节点**，或一次生成 **全部 8 个节点**。
 
 ---
 

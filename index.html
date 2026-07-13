@@ -368,6 +368,7 @@
                 <div class="bg-white/60 backdrop-blur-xl p-6 md:p-8 rounded-[2rem] border border-white shadow-xl shadow-slate-200/40 flex flex-col md:flex-row gap-4 items-end">
                     <div class="flex-1"><label class="block text-xs font-bold text-slate-400 mb-2 pl-2">服务器别名</label><input v-model="newVps.name" placeholder="例如: 日本软银 01" class="w-full bg-white/50 border border-white p-3 rounded-2xl transition hover:bg-white focus:bg-white"></div>
                     <div class="flex-1"><label class="block text-xs font-bold text-slate-400 mb-2 pl-2">公网 IP</label><input v-model="newVps.ip" placeholder="8.8.8.8" class="w-full bg-white/50 border border-white p-3 rounded-2xl transition hover:bg-white focus:bg-white"></div>
+                    <div class="flex-1"><label class="block text-xs font-bold text-slate-400 mb-2 pl-2">证书域名</label><input v-model.trim="newVps.cert_domain" placeholder="例如: vps2.010234.xyz" class="w-full bg-white/50 border border-white p-3 rounded-2xl transition hover:bg-white focus:bg-white"></div>
                     <div class="w-full md:w-48"><label class="block text-xs font-bold text-slate-400 mb-2 pl-2">系统架构</label><select v-model="newVps.os" class="w-full bg-white/50 border border-white p-3 rounded-2xl transition hover:bg-white focus:bg-white outline-none font-medium text-slate-700"><option value="debian">Ubuntu / Debian</option><option value="alpine">Alpine Linux</option></select></div>
                     <button @click="addVps" class="bg-slate-800 text-white px-8 py-3.5 rounded-2xl font-bold hover:bg-black transition-all shadow-lg hover:scale-105 whitespace-nowrap">接入机器</button>
                 </div>
@@ -379,6 +380,7 @@
                                 <div>
                                     <h3 class="font-black text-2xl text-slate-800 flex items-center gap-2 mb-1">{{ vps.name }}<span :class="isOnline(vps.last_report) ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]' : 'bg-rose-400 shadow-[0_0_8px_rgba(251,113,133,0.8)]'" class="w-3 h-3 rounded-full inline-block"></span></h3>
                                     <p class="text-sm font-mono text-slate-400 font-medium">{{ vps.ip }}</p>
+                                    <p v-if="vps.cert_domain" class="text-xs font-mono text-emerald-600 font-medium mt-1">{{ vps.cert_domain }}</p>
                                 </div>
                                 <button @click="deleteVps(vps.ip)" class="text-slate-300 hover:text-rose-500 font-bold transition-all">彻底移除</button>
                             </div>
@@ -694,7 +696,7 @@
                 const currentDomain = window.location.origin;
 
                 const servers = ref([]); const nodes = ref([]); const users = ref([]);
-                const newVps = ref({ name: '', ip: '', os: 'debian' }); const newNodeParams = reactive({}); const newUser = reactive({ username: '', password: '', traffic_limit_gb: '', expire_date: '' });
+                const newVps = ref({ name: '', ip: '', cert_domain: '', os: 'debian' }); const newNodeParams = reactive({}); const newUser = reactive({ username: '', password: '', traffic_limit_gb: '', expire_date: '' });
                 const mySubToken = ref(''); const siteTitle = ref(''); const siteTitleInput = ref(''); const userNewPassword = ref('');
                 const batchStartPort = reactive({}); const batchUser = reactive({}); const batchMode = reactive({}); const batchCertDomain = reactive({});
                 
@@ -964,7 +966,7 @@
                         if (data.mySubToken) mySubToken.value = data.mySubToken;
                         servers.value.forEach(s => { 
                             if(!newNodeParams[s.ip]) newNodeParams[s.ip] = { protocol: 'XTLS-Reality', port: 443, username: 'admin', sni: '', relay_type: 'external', traffic_limit_gb: '', expire_date: '' }; 
-                            if(!deployOsMap[s.ip]) deployOsMap[s.ip] = 'debian'; if(!batchStartPort[s.ip]) batchStartPort[s.ip] = ''; if(!batchUser[s.ip]) batchUser[s.ip] = 'admin'; if(!batchMode[s.ip]) batchMode[s.ip] = 'stable'; if(!batchCertDomain[s.ip]) batchCertDomain[s.ip] = '';
+                            if(!deployOsMap[s.ip]) deployOsMap[s.ip] = 'debian'; if(!batchStartPort[s.ip]) batchStartPort[s.ip] = ''; if(!batchUser[s.ip]) batchUser[s.ip] = 'admin'; if(!batchMode[s.ip]) batchMode[s.ip] = 'stable'; if(!batchCertDomain[s.ip]) batchCertDomain[s.ip] = s.cert_domain || '';
                         });
                         if (activeTab.value === 'nodes') renderKUICharts();
                         
@@ -992,7 +994,7 @@
                 const toggleUser = async (username, status) => { await fetchApi('/api/users', { method: 'PUT', body: JSON.stringify({ username, enable: status }) }); refreshData(); };
                 const deleteUser = async (username) => { if(confirm('⚠️ 确定删除用户？节点将归还给管理员。')) { await fetchApi(`/api/users?username=${username}`, { method: 'DELETE' }); refreshData(); } };
                 const resetUserTraffic = async (username) => { await fetchApi('/api/users', { method: 'PUT', body: JSON.stringify({ username, reset_traffic: true }) }); refreshData(); };
-                const addVps = async () => { if(!newVps.value.ip || !newVps.value.name) return alert('请输入名称和IP'); deployOsMap[newVps.value.ip] = newVps.value.os; saveOsMap(); await fetchApi('/api/vps', { method: 'POST', body: JSON.stringify({ ip: newVps.value.ip, name: newVps.value.name }) }); newVps.value = { name: '', ip: '', os: 'debian' }; refreshData(); fetchProbeData();};
+                const addVps = async () => { if(!newVps.value.ip || !newVps.value.name || !newVps.value.cert_domain) return alert('请输入名称、IP和证书域名'); deployOsMap[newVps.value.ip] = newVps.value.os; saveOsMap(); const res = await fetchApi('/api/vps', { method: 'POST', body: JSON.stringify({ ip: newVps.value.ip, name: newVps.value.name, cert_domain: newVps.value.cert_domain }) }); const data = await res.json(); batchCertDomain[newVps.value.ip] = data.cert_domain; newVps.value = { name: '', ip: '', cert_domain: '', os: 'debian' }; await refreshData(); fetchProbeData(); alert('✅ Cloudflare DNS 已自动配置，请复制该机器的部署命令到 VPS 执行。');};
                 const deleteVps = async (ip) => { if(confirm('🧨 确定移除该机器？该机器相关的探针数据、节点数据将被完全清空！')) { await fetchApi(`/api/vps?ip=${ip}`, { method: 'DELETE' }); refreshData(); fetchProbeData();} };
 
                 const addNode = async (ip) => {
@@ -1039,7 +1041,7 @@
                 const getVpsName = (ip) => servers.value.find(s => s.ip === ip)?.name || ip;
                 
                 const saveOsMap = () => { localStorage.setItem('kui_deploy_os', JSON.stringify(deployOsMap)); };
-                const generateCmd = (ip) => { const osType = deployOsMap[ip] || 'debian'; const scriptUrl = "https://raw.githubusercontent.com/stevenxoyo/K-UI/main/vps/kui.sh"; if (osType === 'alpine') return `apk update && apk add curl && curl -fsSL ${scriptUrl} | sh -s -- --api "${currentDomain}" --ip "${ip}" --token "${authKey.value}"`; else return `apt-get update -y && apt-get install -y curl && bash <(curl -fsSL ${scriptUrl}) --api "${currentDomain}" --ip "${ip}" --token "${authKey.value}"`; };
+                const generateCmd = (ip) => { const osType = deployOsMap[ip] || 'debian'; const certDomain = servers.value.find(s => s.ip === ip)?.cert_domain || ''; const scriptUrl = "https://raw.githubusercontent.com/stevenxoyo/K-UI/main/vps/kui.sh"; const args = `--api "${currentDomain}" --ip "${ip}" --token "${authKey.value}" --cert-domain "${certDomain}"`; if (osType === 'alpine') return `apk update && apk add curl && curl -fsSL ${scriptUrl} | sh -s -- ${args}`; else return `apt-get update -y && apt-get install -y curl && bash <(curl -fsSL ${scriptUrl}) ${args}`; };
 
                 const saveSiteTitle = async () => { if(!siteTitleInput.value) return alert('名称不能为空！'); await fetchApi('/api/settings', { method: 'POST', body: JSON.stringify({ site_title: siteTitleInput.value }) }); siteTitle.value = siteTitleInput.value; alert('✅ KUI 聚合面板名称保存成功！'); };
                 const updateUserPassword = async () => { if(!userNewPassword.value) return alert('请输入新密码'); await fetchApi('/api/user/password', { method: 'PUT', body: JSON.stringify({ password: userNewPassword.value }) }); alert('✅ 密码修改成功！请使用新密码重新登录。'); logout(); };

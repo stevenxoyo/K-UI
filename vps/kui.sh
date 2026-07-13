@@ -10,6 +10,7 @@ while [ "$#" -gt 0 ]; do
         --api) API_URL="$2"; shift ;;
         --ip) VPS_IP="$2"; shift ;;
         --token) TOKEN="$2"; shift ;;
+        --cert-domain) CERT_DOMAIN="$2"; shift ;;
         *) echo "未知参数: $1"; exit 1 ;;
     esac
     shift
@@ -62,9 +63,11 @@ echo "[3/6] 📦 正在安装底层网络依赖..."
 if [ "$OS" = "alpine" ]; then
     apk update
     apk add python3 curl openssl iptables ip6tables coreutils bash tar libc6-compat gcompat iproute2
+    [ -n "$CERT_DOMAIN" ] && apk add certbot
 else
     apt-get update -y
     apt-get install -y python3 curl openssl iptables coreutils bash tar iproute2 iputils-ping
+    [ -n "$CERT_DOMAIN" ] && apt-get install -y certbot
 fi
 
 echo "[4/6] ⚙️ 部署 Sing-box 代理核心..."
@@ -87,24 +90,36 @@ if ! command -v sing-box >/dev/null 2>&1; then
     fi
 fi
 
-echo "[5/6] 📂 初始化 KUI 工作目录与环境..."
-mkdir -p /opt/kui /etc/sing-box
+if [ -n "$CERT_DOMAIN" ]; then
+    echo "[4.5/6] 🔐 正在等待 DNS 生效并自动申请 TLS 证书..."
+    iptables -C INPUT -p tcp --dport 80 -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport 80 -j ACCEPT
+    if command -v ip6tables >/dev/null 2>&1; then
+        ip6tables -C INPUT -p tcp --dport 80 -j ACCEPT 2>/dev/null || ip6tables -I INPUT -p tcp --dport 80 -j ACCEPT
+    fi
+    if command -v ufw >/dev/null 2>&1; then ufw allow 80/tcp >/dev/null 2>&1; fi
 
-cat > /opt/kui/config.json <<EOF
-{
-  "api_url": "${API_URL}/api/config",
-  "report_url": "${API_URL}/api/report",
-  "ip": "${VPS_IP}",
-  "token": "${TOKEN}"
-}
-EOF
+    DNS_READY=0
+    ATTEMPT=1
+    while [ "$ATTEMPT" -le 30 ]; do
+        RESOLVED_IPS=$(python3 - "$CERT_DOMAIN" <<'PY'
+import socket, sys
+try:
+    print("\n".join(sorted({item[4][0] for item in socket.getaddrinfo(sys.argv[1], None, socket.AF_INET)})))
+except Exception:
+    pass
+PY
+)
+        if printf '%s\n' "$RESOLVED_IPS" | grep -Fxq "$VPS_IP"; then DNS_READY=1; break; fi
+        echo "DNS 尚未指向 ${VPS_IP}，10 秒后重试 (${ATTEMPT}/30)..."
+        ATTEMPT=$((ATTEMPT + 1))
+        sleep 10
+    done
+    if [ "$DNS_READY" != "1" ]; then
+        echo "❌ DNS 校验失败: ${CERT_DOMAIN} 未解析到 ${VPS_IP}"
+        exit 1
+    fi
 
-echo "正在拉取最新版 Agent 执行器..."
-curl -fsSL "https://raw.githubusercontent.com/stevenxoyo/K-UI/main/vps/agent.py" -o /opt/kui/agent.py
-chmod +x /opt/kui/agent.py
-
-# Reload sing-box automatically after Certbot renews a trusted certificate.
-if [ -d /etc/letsencrypt/renewal-hooks/deploy ]; then
+    mkdir -p /etc/letsencrypt/renewal-hooks/deploy
     cat > /etc/letsencrypt/renewal-hooks/deploy/restart-kui-sing-box.sh <<'EOF'
 #!/bin/sh
 if command -v systemctl >/dev/null 2>&1; then
@@ -114,7 +129,38 @@ elif command -v rc-service >/dev/null 2>&1; then
 fi
 EOF
     chmod +x /etc/letsencrypt/renewal-hooks/deploy/restart-kui-sing-box.sh
+
+    certbot certonly --standalone --preferred-challenges http --non-interactive --agree-tos --register-unsafely-without-email --keep-until-expiring -d "$CERT_DOMAIN"
+    if [ ! -f "/etc/letsencrypt/live/${CERT_DOMAIN}/fullchain.pem" ]; then
+        echo "❌ 证书申请失败"
+        exit 1
+    fi
+
+    if [ "$OS" = "alpine" ]; then
+        rc-update add crond default >/dev/null 2>&1 || true
+        rc-service crond start >/dev/null 2>&1 || true
+        grep -Fq 'certbot renew --quiet' /etc/crontabs/root 2>/dev/null || echo '17 3 * * * certbot renew --quiet' >> /etc/crontabs/root
+    else
+        systemctl enable --now certbot.timer >/dev/null 2>&1 || true
+    fi
 fi
+
+echo "[5/6] 📂 初始化 KUI 工作目录与环境..."
+mkdir -p /opt/kui /etc/sing-box
+
+cat > /opt/kui/config.json <<EOF
+{
+  "api_url": "${API_URL}/api/config",
+  "report_url": "${API_URL}/api/report",
+  "ip": "${VPS_IP}",
+  "token": "${TOKEN}",
+  "cert_domain": "${CERT_DOMAIN}"
+}
+EOF
+
+echo "正在拉取最新版 Agent 执行器..."
+curl -fsSL "https://raw.githubusercontent.com/stevenxoyo/K-UI/main/vps/agent.py" -o /opt/kui/agent.py
+chmod +x /opt/kui/agent.py
 
 echo "[6/6] 🛡️ 智能注册底层守护进程并启动..."
 if [ "$OS" = "alpine" ]; then
