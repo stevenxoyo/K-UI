@@ -103,6 +103,19 @@ echo "正在拉取最新版 Agent 执行器..."
 curl -fsSL "https://raw.githubusercontent.com/stevenxoyo/K-UI/main/vps/agent.py" -o /opt/kui/agent.py
 chmod +x /opt/kui/agent.py
 
+# Reload sing-box automatically after Certbot renews a trusted certificate.
+if [ -d /etc/letsencrypt/renewal-hooks/deploy ]; then
+    cat > /etc/letsencrypt/renewal-hooks/deploy/restart-kui-sing-box.sh <<'EOF'
+#!/bin/sh
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl restart sing-box
+elif command -v rc-service >/dev/null 2>&1; then
+    rc-service sing-box restart
+fi
+EOF
+    chmod +x /etc/letsencrypt/renewal-hooks/deploy/restart-kui-sing-box.sh
+fi
+
 echo "[6/6] 🛡️ 智能注册底层守护进程并启动..."
 if [ "$OS" = "alpine" ]; then
     cat > /etc/init.d/kui-agent <<EOF
