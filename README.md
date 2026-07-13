@@ -9,12 +9,12 @@ dev分支已推送完整功能KUI面板
 
 这是结合了 **KUI 代理聚合面板** 与 **Server Monitor Pro 全景探针系统** 的终极 Serverless 解决方案。
 
-只需一次 Cloudflare Pages 部署，即可拥有一个高可用、零服务器成本的集群管理中心。通过我们全新重构的**全能 Python Agent**，您只需在 VPS 上执行**一条命令**，即可同时完成 **“8合1防封代理矩阵下发”** 与 **“深度系统性能探针监控”**。
+只需一次 Cloudflare Pages 部署，即可拥有一个高可用、零服务器成本的集群管理中心。通过我们全新重构的**全能 Python Agent**，您只需在 VPS 上执行**一条命令**，即可同时完成 **“稳定代理节点下发”** 与 **“深度系统性能探针监控”**。
 
 ## ✨ 核心特性 (Features)
 
 ### 🚀 KUI 极速节点网关  特别感谢@FSCARMEN https://github.com/fscarmen/sing-box 加速实现多协议的部署
-*   **一键 8合1 协议全家桶：** 支持极速下发 XTLS-Reality, Hysteria2, TUIC, Trojan, gRPC, Naive 等主流抗封锁协议。
+*   **一键稳定 3合1：** 默认下发已验证的 XTLS-Reality、TUIC 和 gRPC-Reality；其他协议仍可手动配置。
 *   **Argo 隧道守护：** 内置 Cloudflared 守护进程，支持 VLESS-Argo 全自动穿透。
 *   **多用户体系：** 完善的用户配额、到期时间管理，专属独立订阅链接，防泄漏重置机制。
 *   **流量结算：** 自动统计用户/节点流量，精确到字节，支持重置与图表回溯。

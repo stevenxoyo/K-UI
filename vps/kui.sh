@@ -100,7 +100,7 @@ cat > /opt/kui/config.json <<EOF
 EOF
 
 echo "正在拉取最新版 Agent 执行器..."
-curl -sL "https://raw.githubusercontent.com/a62169722/KUI/main/vps/agent.py" -o /opt/kui/agent.py
+curl -fsSL "https://raw.githubusercontent.com/stevenxoyo/K-UI/main/vps/agent.py" -o /opt/kui/agent.py
 chmod +x /opt/kui/agent.py
 
 echo "[6/6] 🛡️ 智能注册底层守护进程并启动..."
