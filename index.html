@@ -543,7 +543,7 @@
                                 <div><label class="block text-xs font-bold text-slate-500 mb-1">自定义背景图片 URL (清空恢复纯色)</label><input v-model="probeSys.custom_bg" class="w-full bg-white/50 border p-2.5 rounded-xl text-sm font-medium text-slate-700"></div>
                                 <div><label class="block text-xs font-bold text-slate-500 mb-1">自定义 &lt;head&gt; 注入</label><textarea v-model="probeSys.custom_head" rows="2" class="w-full bg-white/50 border p-2.5 rounded-xl text-sm font-mono"></textarea></div>
                                 <div><label class="block text-xs font-bold text-slate-500 mb-1">自定义底部 Script 注入</label><textarea v-model="probeSys.custom_script" rows="2" class="w-full bg-white/50 border p-2.5 rounded-xl text-sm font-mono"></textarea></div>
-                                <div><label class="block text-xs font-bold text-slate-500 mb-1">探针客户端上报间隔 (秒)</label><input type="number" v-model="probeSys.report_interval" class="w-full bg-white/50 border p-2.5 rounded-xl text-sm font-medium text-slate-700"></div>
+                                <div><label class="block text-xs font-bold text-slate-500 mb-1">探针客户端上报间隔 (秒，最低60)</label><input type="number" min="60" v-model="probeSys.report_interval" class="w-full bg-white/50 border p-2.5 rounded-xl text-sm font-medium text-slate-700"></div>
                             </div>
                             <div class="space-y-4">
                                 <label class="block text-sm font-bold text-slate-700 mb-2">👁️ 前台展示控制</label>
@@ -714,7 +714,7 @@
                 ]);
                 const pingNodes = reactive({ ct: [], cu: [], cm: [] });
 
-                const probeSys = reactive({ theme: 'theme1', is_public: 'true', site_title: 'Server Monitor Pro', custom_bg: '', custom_css: '', custom_head: '', custom_script: '', report_interval: '5', visits_total: '0', visits_today: '0', ping_node_ct: 'default', ping_node_cu: 'default', ping_node_cm: 'default', enable_popup: 'false', popup_content: '', tg_notify: 'false', tg_bot_token: '', tg_chat_id: '' });
+                const probeSys = reactive({ theme: 'theme1', is_public: 'true', site_title: 'Server Monitor Pro', custom_bg: '', custom_css: '', custom_head: '', custom_script: '', report_interval: '60', visits_total: '0', visits_today: '0', ping_node_ct: 'default', ping_node_cu: 'default', ping_node_cm: 'default', enable_popup: 'false', popup_content: '', tg_notify: 'false', tg_bot_token: '', tg_chat_id: '' });
                 const publicProbeServers = ref([]);
                 const probeView = ref(localStorage.getItem('monitor_preferred_view') || 'card');
                 const probeDetailId = ref(null); const probeDetail = ref({});
@@ -1071,11 +1071,11 @@
 
                 let dataTimer = null; let pingTimer = null; let probeTimer = null;
                 const startPolling = () => { 
-                    if (!dataTimer) { refreshData(); dataTimer = setInterval(() => { if (isLoggedIn.value && !document.hidden && activeTab.value !== 'probe') refreshData(); }, 2500); }
-                    if (!pingTimer) { sendUiPing(); pingTimer = setInterval(() => { if (isLoggedIn.value && !document.hidden) sendUiPing(); }, 10000); }
+                    if (!dataTimer) { refreshData(); dataTimer = setInterval(() => { if (isLoggedIn.value && !document.hidden && activeTab.value !== 'probe') refreshData(); }, 15000); }
+                    if (!pingTimer) { sendUiPing(); pingTimer = setInterval(() => { if (isLoggedIn.value && !document.hidden) sendUiPing(); }, 30000); }
                 };
                 const startProbePolling = () => { 
-                    if (!probeTimer) { fetchProbeData(); probeTimer = setInterval(() => { if (!document.hidden && (!isLoggedIn.value || activeTab.value === 'probe')) fetchProbeData(); }, 4000); } 
+                    if (!probeTimer) { fetchProbeData(); probeTimer = setInterval(() => { if (!document.hidden && (!isLoggedIn.value || activeTab.value === 'probe')) fetchProbeData(); }, 15000); }
                 }
                 const stopPolling = () => { if (dataTimer) { clearInterval(dataTimer); dataTimer = null; } if (pingTimer) { clearInterval(pingTimer); pingTimer = null; } };
 

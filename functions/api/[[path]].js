@@ -8,6 +8,8 @@ async function sha256(text) {
     return Array.from(new Uint8Array(buffer)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+const MIN_AGENT_INTERVAL = 60;
+
 function isValidIPv4(ip) {
     const parts = String(ip || '').split('.');
     return parts.length === 4 && parts.every(part => /^\d{1,3}$/.test(part) && Number(part) >= 0 && Number(part) <= 255);
@@ -127,7 +129,7 @@ async function handleProbeAPI(request, env, context, pathArray) {
             else if (callback_query) { chatId = callback_query.message.chat.id.toString(); text = callback_query.data; msgId = callback_query.message.message_id; }
             if (chatId !== tgChatId) return new Response('OK', { status: 200 });
 
-            const mainMenuText = `🖥 <b>Server Monitor Pro 探针管理</b>\n\n您可以使用命令快速设置系统：\n<code>/set_interval 10</code> - 上报间隔10秒\n<code>/set_sitetitle 新标题</code> - 更改大盘标题\n<code>/menu</code> - 调出本菜单`;
+            const mainMenuText = `🖥 <b>Server Monitor Pro 探针管理</b>\n\n您可以使用命令快速设置系统：\n<code>/set_interval 60</code> - 上报间隔最低60秒\n<code>/set_sitetitle 新标题</code> - 更改大盘标题\n<code>/menu</code> - 调出本菜单`;
             const mainMenuKb = { inline_keyboard: [ [{text: '📋 探针节点列表', callback_data: 'cb_list_nodes'}], [{text: '⚙️ 系统设置快捷开关', callback_data: 'cb_settings'}] ] };
             
             if (callback_query) {
@@ -161,7 +163,7 @@ async function handleProbeAPI(request, env, context, pathArray) {
             if (message) {
                 const cmdParts = text.trim().split(/\s+/); const cmd = cmdParts[0].toLowerCase();
                 if (cmd === '/start' || cmd === '/menu') await tgSend(chatId, mainMenuText, mainMenuKb);
-                else if (cmd === '/set_interval' && cmdParts[1]) { await db.prepare('INSERT INTO probe_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind('report_interval', cmdParts[1]).run(); await tgSend(chatId, `✅ 上报间隔设为 ${cmdParts[1]} 秒`); }
+                else if (cmd === '/set_interval' && cmdParts[1]) { const interval = Math.max(MIN_AGENT_INTERVAL, parseInt(cmdParts[1]) || MIN_AGENT_INTERVAL); await db.prepare('INSERT INTO probe_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind('report_interval', String(interval)).run(); await tgSend(chatId, `✅ 上报间隔设为 ${interval} 秒`); }
                 else if (cmd === '/set_sitetitle') { await db.prepare('INSERT INTO probe_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind('site_title', text.replace(cmdParts[0], '').trim()).run(); await tgSend(chatId, '✅ 大盘标题已更新'); }
             }
             return new Response('OK', { status: 200 });
@@ -169,8 +171,9 @@ async function handleProbeAPI(request, env, context, pathArray) {
     }
 
     if (method === 'GET' && subPath === 'public') {
-        const settings = { theme: 'theme1', is_public: 'true', site_title: '⚡ Server Monitor Pro', show_price: 'true', show_expire: 'true', show_bw: 'true', show_tf: 'true', custom_css: '', custom_bg: '', custom_head: '', custom_script: '', report_interval: '5', enable_popup: 'false', popup_content: '', cached_nodes_data: '' };
+        const settings = { theme: 'theme1', is_public: 'true', site_title: '⚡ Server Monitor Pro', show_price: 'true', show_expire: 'true', show_bw: 'true', show_tf: 'true', custom_css: '', custom_bg: '', custom_head: '', custom_script: '', report_interval: String(MIN_AGENT_INTERVAL), enable_popup: 'false', popup_content: '', cached_nodes_data: '' };
         try { const { results } = await db.prepare('SELECT * FROM probe_settings').all(); if (results) results.forEach(r => settings[r.key] = r.value); } catch(e){}
+        settings.report_interval = String(Math.max(MIN_AGENT_INTERVAL, parseInt(settings.report_interval) || MIN_AGENT_INTERVAL));
         
         const isAjax = url.searchParams.get('ajax') === '1';
         if (!isAjax) {
@@ -220,7 +223,7 @@ async function handleProbeAPI(request, env, context, pathArray) {
     
     if (method === 'POST' && subPath === 'admin/settings') {
         const { settings } = await request.json();
-        for (const [k, v] of Object.entries(settings)) { await db.prepare('INSERT INTO probe_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind(k, v).run(); }
+        for (const [k, v] of Object.entries(settings)) { const value = k === 'report_interval' ? String(Math.max(MIN_AGENT_INTERVAL, parseInt(v) || MIN_AGENT_INTERVAL)) : v; await db.prepare('INSERT INTO probe_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind(k, value).run(); }
         if (settings.tg_bot_token) {
             try {
                await fetch(`https://api.telegram.org/bot${settings.tg_bot_token}/setWebhook`, {
@@ -269,7 +272,9 @@ export async function onRequest(context) {
 
     // 🌟 Agent 统一探针与管理上报接口 (融入全新的 Reset Day 计算和动态云端测速节点)
     if (action === "report" && method === "POST") {
-        if (!(await verifyAuth(request.headers.get("Authorization"), db, env))) return new Response("Unauthorized", { status: 401 });
+        if (!(await verifyAuth(request.headers.get("Authorization"), db, env))) {
+            return Response.json({ success: false, unauthorized: true, interval: MIN_AGENT_INTERVAL }, { headers: { 'Cache-Control': 'no-store' } });
+        }
         const data = await request.json(); 
         const nowMs = Date.now();
         const vpsIp = data.ip;
@@ -372,12 +377,12 @@ export async function onRequest(context) {
         
         let fastMode = false; try { const uiActive = await db.prepare("SELECT ts FROM sys_config WHERE key = 'ui_active'").first(); if (uiActive && (nowMs - uiActive.ts < 20000)) fastMode = true; } catch(e) {}
         
-        let reportInterval = 5; let pingCt = 'default'; let pingCu = 'default'; let pingCm = 'default';
+        let reportInterval = MIN_AGENT_INTERVAL; let pingCt = 'default'; let pingCu = 'default'; let pingCm = 'default';
         try { 
             const { results } = await db.prepare("SELECT key, value FROM probe_settings WHERE key IN ('report_interval', 'ping_node_ct', 'ping_node_cu', 'ping_node_cm')").all(); 
             if (results) {
                 results.forEach(r => {
-                    if (r.key === 'report_interval') reportInterval = parseInt(r.value) || 5;
+                    if (r.key === 'report_interval') reportInterval = Math.max(MIN_AGENT_INTERVAL, parseInt(r.value) || MIN_AGENT_INTERVAL);
                     if (r.key === 'ping_node_ct') pingCt = r.value;
                     if (r.key === 'ping_node_cu') pingCu = r.value;
                     if (r.key === 'ping_node_cm') pingCm = r.value;
