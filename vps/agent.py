@@ -35,8 +35,8 @@ prev_cpu_total = prev_cpu_idle = 0
 prev_rx = prev_tx = 0
 loop_counter = 0
 
-# 🌟 动态心跳间隔，默认 5 秒
-global_interval = 5
+# 🌟 动态心跳间隔，最低 60 秒，避免耗尽 Pages Functions 免费请求额度
+global_interval = 60
 
 # 🌟 增加全局 Ping 状态缓存锁，防止在非测速轮次上传 '0' 导致前端图表归零
 last_pings = {"ct": "0", "cu": "0", "cm": "0", "bd": "0"}
@@ -338,7 +338,7 @@ def report_status(current_nodes, argo_urls):
         res = urllib.request.urlopen(req, timeout=5)
         resp_data = json.loads(res.read().decode('utf-8'))
         if resp_data and "interval" in resp_data:
-            global_interval = max(1, int(resp_data["interval"]))
+            global_interval = max(60, int(resp_data["interval"]))
     except Exception as e: pass
 
 def fetch_and_apply_configs():
